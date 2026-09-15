@@ -2932,23 +2932,33 @@ void igQtMainWindow::initAllFilters() {
     connect(ui->menu_filters->addAction("多块模型表面提取"), &QAction::triggered, this, [&](bool checked) {
         if (!rendererWidget) {
             showDarkFramelessMessage(QStringLiteral("Warning"), QStringLiteral("渲染器组件未初始化。"));
+            return;
         }
 
         auto scene = rendererWidget->GetScene();
-        if (!scene) { showDarkFramelessMessage(QStringLiteral("Warning"), QStringLiteral("场景未初始化。")); }
+        if (!scene) { 
+            showDarkFramelessMessage(QStringLiteral("Warning"), QStringLiteral("场景未初始化。")); 
+            return;
+        }
 
         auto currentModel = scene->GetCurrentModel();
         if (!currentModel) {
             showDarkFramelessMessage(QStringLiteral("Warning"), QStringLiteral("未能获取当前选定模型。"));
+            return;
         }
 
         auto obj = currentModel->GetDataObject();
-        if (!obj) { showDarkFramelessMessage(QStringLiteral("Warning"), QStringLiteral("未能获取DataObject。")); }
+        if (!obj) { 
+            showDarkFramelessMessage(QStringLiteral("Warning"), QStringLiteral("未能获取DataObject。")); 
+            return;
+        }
 
         auto multiBlockFilter = MultiBlockGeometryFilter::New();
         multiBlockFilter->SetInput(obj);
         if (!multiBlockFilter->Execute()) {
-            showDarkFramelessMessage(QStringLiteral("Warning"), QStringLiteral("多块模型表面提取失败。"));
+            QString errorMsg = QString::fromStdString(multiBlockFilter->GetMessage());
+            if (errorMsg.isEmpty()) { errorMsg = QStringLiteral("多块模型表面提取失败。"); }
+            showDarkFramelessMessage(QStringLiteral("提示"), errorMsg);
             return;
         }
 
@@ -2957,6 +2967,18 @@ void igQtMainWindow::initAllFilters() {
         modelTreeWidget->addDataObjectToModelTree(multiBlockObj, Algorithm);
 
         rendererWidget->update();
+
+        // 子构件层面的异常信息汇总展示
+        const auto& failedBlocks = multiBlockFilter->GetFailedBlocks();
+        if (!failedBlocks.empty()) {
+            QString warningMsg = QStringLiteral("多块表面提取已完成，但以下 %1 个子构件处理异常（已为您原样保留）：\n")
+                                         .arg(failedBlocks.size());
+            for (const auto& block: failedBlocks) {
+                warningMsg += QStringLiteral("• [%1]: %2\n")
+                                      .arg(QString::fromStdString(block.path), QString::fromStdString(block.reason));
+            }
+            showDarkFramelessMessage(QStringLiteral("部分子构件提示"), warningMsg);
+        }
        });
   
     QAction* featureRegion = ui->menu_filters->addAction(QStringLiteral("特征区域Id (FeatureEdgeRegion id)"));
