@@ -183,75 +183,94 @@ Examples/Filter/TestMultiBlockGeometry.cpp
 
 构建与运行方式：
 ```bash
-# 运行编译生成的独立可执行文件（内部使用相对路径，无需手动传参）
+# 直接运行即可：三组用例（正常/异常/输入校验）全部自动执行，
+# 打印断言结果后拉起 3D 交互窗口展示抽取效果
 ./cmake-build-examples/testMultiBlockGeometry.exe
+
+# 若只想看断言结果、不想弹窗（例如在终端或远程环境），可追加 --selfcheck
+./cmake-build-examples/testMultiBlockGeometry.exe --selfcheck
 ```
 
-典型调用流程代码：
-```cpp
-#include <Core/iGameScene.h>
-#include <ModelSurface/iGameMultiBlockGeometryFilter.h>
-#include <iGameDrawObject.h>
-#include <iGameFileIO.h>
-#include <iGameRenderWindow.h>
+> - **`--selfcheck` 不是测试开关**：三组用例在任何模式下都会完整执行，该参数仅控制「跑完后是否打开 3D 窗口」；
+> - 退出码约定：`0` = 全部断言通过；`1` = 存在未通过断言或程序异常。
 
-int main() {
-    // 读取装配体文件（相对路径写死，开箱即用）
-    const std::string fileName = "./Models/assembly_primitives.vtm";
-    iGame::DataObject::Pointer root = iGame::FileIO::ReadFile(fileName);
+#### 自动化覆盖范围（3 组用例，共 28 项断言）
 
-    // 实例化 Filter 并运行
-    auto filter = iGame::MultiBlockGeometryFilter::New();
-    filter->SetInput(root);
-    if (!filter->Execute()) {
-        std::cerr << "[Error] " << filter->GetMessage() << std::endl;
-        return -1;
-    }
+| 用例 | 输入模型 | 断言要点 |
+| :--- | :--- | :--- |
+| **① 正常路径** | `assembly_primitives.vtm` | 执行成功；`GetFailedBlocks()` 为空；输出保留 2 个子块；六面体 **10 面 / 12 点**；三棱柱 **8 面 / 8 点** |
+| **② 异常路径** | `assembly_with_error.vtm` | 部分成功时仍返回 `true`；**输出仍保留 2 个子块（失败块未丢弃）**；失败报告数量 = 1；失败路径含 `assembly_empty_error`；原因非空；同装配体中的正常零件仍抽取成功；失败零件保留为原始对象 |
+| **③ 输入校验** | `assembly_cube_hex.vtk`（单网格）<br>空指针 | 单网格输入返回 `false` 且 `GetMessage()` 非空；空指针输入返回 `false` 且给出原因 |
 
-    auto res = filter->GetOutput();
+#### 实测输出样例
 
-    // 遍历多块部件并添加至渲染场景
-    auto scene = iGame::Scene::New();
-    if (res->HasSubDataObject()) {
-        for (auto it = res->SubDataObjectIteratorBegin(); it != res->SubDataObjectIteratorEnd(); ++it) {
-            auto drawObj = iGame::DynamicCast<iGame::DrawObject>(it->second);
-            if (drawObj) {
-                drawObj->SetViewStyle(IG_SURFACE);
-                drawObj->AddViewStyle(IG_WIREFRAME);
-                drawObj->ConvertToDrawableData();
-                scene->AddModel(it->second);
-            }
-        }
-    }
+> 说明：测试用例的控制台输出统一使用**英文**（与项目其他 Example 一致）。原因是 Windows 控制台默认代码页为 GBK，而源码按 UTF-8 编译，直接输出中文会出现乱码；引入 `<windows.h>` 设置 UTF-8 代码页又会造成 `GetMessage` 宏与 Filter 接口名冲突。
+>
+> 而 `GetMessage()` / `GetFailedBlocks()` 的返回值仍为**中文**（供 Qt 弹窗展示，Qt 使用 `QString::fromStdString`，不受控制台编码影响）。因此在上面的样例输出中，`failed reason` 与 `rejection reason` 两行若在 GBK 控制台运行可能显示为乱码，这属于控制台编码限制，**不影响任何断言判定**（断言仅校验其非空）。
 
-    // 报告子构件异常
-    for (const auto& block : filter->GetFailedBlocks()) {
-        std::cerr << "[Block Failed] " << block.path << " -> " << block.reason << std::endl;
-    }
-    return 0;
-}
+```text
+============================================================
+  [iGameVis] MultiBlockGeometryFilter Self-Test
+  usage: testMultiBlockGeometry [--selfcheck]
+         --selfcheck  run assertions only, skip the 3D window
+============================================================
+
+[Test 1] Normal path: extract every block of a multiblock assembly
+  file: ./Models/assembly_primitives.vtm
+    [PASS] read multiblock assembly
+    [PASS] Execute() returns true
+    [PASS] no failed block reported
+    [PASS] output data object is not null
+    [PASS] output keeps 2 sub-blocks
+    [PASS] cube block found and is a SurfaceMesh
+      * assembly_cube_hex: Points = 12, Faces = 10
+    [PASS] cube face count == 10
+    [PASS] cube point count == 12
+    [PASS] wedge block found and is a SurfaceMesh
+      * assembly_wedge_prism: Points = 8, Faces = 8
+    [PASS] wedge face count == 8
+    [PASS] wedge point count == 8
+
+[Test 2] Error path: tolerate a broken block and report it
+  file: ./Models/assembly_with_error.vtm
+    [PASS] read assembly containing a broken block
+    [PASS] Execute() still returns true on partial success
+    [PASS] output data object is not null
+    [PASS] failed block preserved (output still has 2 sub-blocks)
+    [PASS] failed block report count == 1
+      * failed path  : /assembly_with_error/assembly_empty_error
+      * failed reason: 表面抽取失败或提取面数为0
+    [PASS] failed block path is not empty
+    [PASS] failed block path contains the broken part name
+    [PASS] failed block reason is not empty
+    [PASS] healthy block in the same assembly still extracted (10 faces)
+    [PASS] failed block still present in the output tree
+    [PASS] failed block kept as the original object (not a SurfaceMesh)
+
+[Test 3] Input validation: a single mesh must be rejected
+  file: ./Models/assembly_cube_hex.vtk (single unstructured grid)
+    [PASS] read single mesh model
+    [PASS] single mesh has no sub-blocks (not a multiblock)
+    [PASS] Execute() returns false for single mesh input
+    [PASS] rejection reason is provided
+      * rejection reason: 当前模型不是多块复合装配体，请使用普通单网格表面提取
+    [PASS] Execute() returns false for null input
+    [PASS] null input rejection reason is provided
+
+============================================================
+  Result: 28 passed, 0 failed
+============================================================
+[SUCCESS] all assertions passed.
 ```
 
 ### 5.2 测试模型清单 (Test Models)
 
 | 模型文件 | 用途 | 内容 |
 | :--- | :--- | :--- |
-| `Models/assembly_primitives.vtm` | **正常路径验证** | 引用 `assembly_cube_hex.vtk`（六面体）+ `assembly_wedge_prism.vtk`（三棱柱） |
+| `Models/assembly_primitives.vtm` | **正常路径验证** | 引用 `assembly_cube_hex.vtk`（六面体，含温度/应力场）+ `assembly_wedge_prism.vtk`（三棱柱，含压力/应变场） |
 | `Models/assembly_with_error.vtm` | **异常路径验证** | 引用 `assembly_cube_hex.vtk`（正常）+ `assembly_empty_error.vtk`（0 单元空网格，必然失败） |
 | `Models/assembly_empty_error.vtk` | 异常 fixture | 仅 4 个点、0 个单元的 `UNSTRUCTURED_GRID` |
-
-**异常路径实测输出**（控制台 + 日志）：
-
-```text
-[MultiBlockGeometryFilter] Block failed: path='/assembly_with_error/assembly_empty_error', reason='no surface extracted (0 faces)'
-```
-
-**Qt 弹窗实测输出**：
-
-```text
-多块表面提取已完成，但以下 1 个子构件处理异常（已为您原样保留）：
-• [/assembly_with_error/assembly_empty_error]: 表面抽取失败或提取面数为0
-```
+| `Models/assembly_cube_hex.vtk` | 输入校验 fixture | 单体非结构网格，用于验证「非多块输入被拒绝」 |
 
 ---
 
