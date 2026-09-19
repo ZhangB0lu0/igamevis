@@ -2932,103 +2932,133 @@ void igQtMainWindow::initAllFilters() {
     });
 
     
-    QAction* cellMeshMetrics = ui->menu_filters->addAction(QStringLiteral("单元网格指标 (CellMeshMetrics)"));
+    QAction* cellMeshMetrics = ui->menu_filters->addAction(QStringLiteral("单元质量评估 (Cell Quality)"));
     connect(cellMeshMetrics, &QAction::triggered, this, [&](bool checked) {
         // 1. 创建对话框
         igQtFilterDialogDockWidget* dialog = new igQtFilterDialogDockWidget(this, true);
-        dialog->setFilterTitle(QStringLiteral("单元网格指标 (Cell Mesh Metrics)"));
+        dialog->setFilterTitle(QStringLiteral("单元质量评估 (Cell Quality)"));
+        dialog->setFilterDescription(
+                QStringLiteral("对齐 ParaView Cell Quality：选择一个统一指标作用于模型内所有单元；\n"
+                               "不适用的单元填入「不支持值」，执行后汇总报告跳过数量。"));
 
-        // 2. 创建下拉框
-        std::vector<QString> metricNames = {QStringLiteral("四面体: 边长比 (Edge Ratio)"),
-                                            QStringLiteral("四面体: 单元体积 (Volume)"),
-                                            QStringLiteral("四面体: 纵横比 (Aspect Ratio)"),
-                                            QStringLiteral("四面体: 雅可比 (Jacobian)"),
-                                            QStringLiteral("四面体: 塌陷率 (Collapse Ratio)"),
-                                            QStringLiteral("四面体: 体积歪斜度 (Vol Skew)"),
-                                            QStringLiteral("四面体: 最小内角 (Min Angle)"),
-                                            QStringLiteral("四面体: 等角斜率 (Equiangle Skewness)"),
-                                            QStringLiteral("四面体: 内切球半径 (Inradius)"),
-                                            QStringLiteral("四面体: 外接球半径 (Circumradius)"),
-                                            QStringLiteral("四面体: 体长宽比 (Vol Aspect Ratio)"),
-                                            QStringLiteral("六面体: 单元体积 (Volume)"),
-                                            QStringLiteral("六面体: 锥度 (Taper)"),
-                                            QStringLiteral("六面体: 雅可比矩阵 (Jacobian)"),
-                                            QStringLiteral("六面体: 边长比 (Edge Ratio)"),
-                                            QStringLiteral("六面体: 最大长宽比 (Max Edge Ratio)"),
-                                            QStringLiteral("六面体: 歪斜度 (Skew)"),
-                                            QStringLiteral("六面体: 伸展度 (Stretch)"),
-                                            QStringLiteral("六面体: 对角线比值 (Diagonal)"),
-                                            QStringLiteral("六面体: 相对大小平方 (Relative Size)"),
-                                            QStringLiteral("六面体: 最小标量雅可比 (Min Scaled Jacobian)"),
-                                            QStringLiteral("六面体: 平均标量雅可比 (Avg Scaled Jacobian)")};
+        // 2. 统一指标下拉框（与 ParaView 一致的交互，不再区分四面体/六面体专用算法）
+        std::vector<QString> metricNames = {
+                QStringLiteral("边长比 (Edge Ratio)"),
+                QStringLiteral("单元体积 (Volume)"),
+                QStringLiteral("纵横比 (Aspect Ratio)"),
+                QStringLiteral("雅可比行列式 (Jacobian)"),
+                QStringLiteral("歪斜度 (Skew)"),
+                QStringLiteral("最小内角 (Minimum Angle)"),
+                QStringLiteral("锥度 (Taper)"),
+                QStringLiteral("伸展度 (Stretch)"),
+                QStringLiteral("对角线比值 (Diagonal)"),
+                QStringLiteral("最大长宽比 (Max Edge Ratio)"),
+                QStringLiteral("塌陷率 (Collapse Ratio)")};
 
-        std::vector<iGame::VolumeMeshMetricsFilter::VolumeMetric> metricEnums = {
-                iGame::VolumeMeshMetricsFilter::TET_EDGE_RATIO,
-                iGame::VolumeMeshMetricsFilter::TET_VOLUME,
-                iGame::VolumeMeshMetricsFilter::TET_ASPECT_RATIO,
-                iGame::VolumeMeshMetricsFilter::TET_JACOBIAN,
-                iGame::VolumeMeshMetricsFilter::TET_COLLAPSE_RATIO,
-                iGame::VolumeMeshMetricsFilter::TET_VOL_SKEW,
-                iGame::VolumeMeshMetricsFilter::TET_MIN_ANGLE,
-                iGame::VolumeMeshMetricsFilter::TET_EQUIANGLE_SKEWNESS,
-                iGame::VolumeMeshMetricsFilter::TET_INRADIUS,
-                iGame::VolumeMeshMetricsFilter::TET_CIRCUMRADIUS,
-                iGame::VolumeMeshMetricsFilter::TET_VOL_ASPECT_RATIO,
-                iGame::VolumeMeshMetricsFilter::HEX_VOLUME,
-                iGame::VolumeMeshMetricsFilter::HEX_TAPER,
-                iGame::VolumeMeshMetricsFilter::HEX_JACOBIAN,
-                iGame::VolumeMeshMetricsFilter::HEX_EDGE_RATIO,
-                iGame::VolumeMeshMetricsFilter::HEX_MAX_EDGE_RATIO,
-                iGame::VolumeMeshMetricsFilter::HEX_SKEW,
-                iGame::VolumeMeshMetricsFilter::HEX_STRETCH,
-                iGame::VolumeMeshMetricsFilter::HEX_DIAGONAL,
-                iGame::VolumeMeshMetricsFilter::HEX_RELATIVE_SIZE_SQUARED,
-                iGame::VolumeMeshMetricsFilter::HEX_MIN_SCALED_JACOBIAN,
-                iGame::VolumeMeshMetricsFilter::HEX_AVG_SCALED_JACOBIAN};
+        std::vector<iGame::CellMeshMetricsFilter::CellQualityMetric> metricEnums = {
+                iGame::CellMeshMetricsFilter::QUALITY_EDGE_RATIO,
+                iGame::CellMeshMetricsFilter::QUALITY_VOLUME,
+                iGame::CellMeshMetricsFilter::QUALITY_ASPECT_RATIO,
+                iGame::CellMeshMetricsFilter::QUALITY_JACOBIAN,
+                iGame::CellMeshMetricsFilter::QUALITY_SKEW,
+                iGame::CellMeshMetricsFilter::QUALITY_MIN_ANGLE,
+                iGame::CellMeshMetricsFilter::QUALITY_TAPER,
+                iGame::CellMeshMetricsFilter::QUALITY_STRETCH,
+                iGame::CellMeshMetricsFilter::QUALITY_DIAGONAL,
+                iGame::CellMeshMetricsFilter::QUALITY_MAX_EDGE_RATIO,
+                iGame::CellMeshMetricsFilter::QUALITY_COLLAPSE_RATIO};
+
         int comboID =
                 dialog->addParameter(igQtFilterDialogDockWidget::QT_COMBO_BOX, QStringLiteral("评估指标"), metricNames);
+
+        // 3. 不支持/无效值（对齐 ParaView 的 UnsupportedGeometry，默认 -1.0）
+        int unsupportedId =
+                dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT, QStringLiteral("不支持/无效值"), "-1.0");
+
         dialog->show();
 
-        // 3. 确认回调逻辑
+        // 4. 确认回调逻辑
         dialog->setApplyFunctor([=, this]() {
-            // 3.1 获取当前模型和数据对象
-            if (rendererWidget->GetScene() == nullptr || rendererWidget->GetScene()->GetCurrentModel() == nullptr) {
+            // 4.1 前置校验：必须有选中模型
+            auto scene = rendererWidget ? rendererWidget->GetScene() : nullptr;
+            if (scene == nullptr || scene->GetCurrentModel() == nullptr) {
                 showDarkFramelessMessage(QStringLiteral("无可用模型"),
                                          QStringLiteral("请先在模型树中选中需要评估的体网格模型。"));
                 dialog->close();
                 return;
             }
-            auto obj = rendererWidget->GetScene()->GetCurrentModel()->GetDataObject();
+            auto obj = scene->GetCurrentModel()->GetDataObject();
             if (obj == nullptr) {
                 showDarkFramelessMessage(QStringLiteral("无可用模型"), QStringLiteral("当前模型数据对象为空。"));
                 dialog->close();
                 return;
             }
 
-            // 3.2 获取选择的指标
+            // 4.2 读取指标
             bool ok = false;
             int selectedIndex = dialog->getComboIndex(comboID, ok);
-            if (!ok || selectedIndex < 0 || selectedIndex >= metricEnums.size()) {
+            if (!ok || selectedIndex < 0 || selectedIndex >= (int) metricEnums.size()) {
                 showDarkFramelessMessage(QStringLiteral("无效选择"), QStringLiteral("请选择一个有效的评估指标。"));
                 dialog->close();
                 return;
             }
             auto metric = metricEnums[selectedIndex];
 
-            // 3.3 执行filter
+            // 4.3 读取"不支持值"，非法输入则回退到 -1.0
+            double unsupportedValue = -1.0;
+            bool okValue = false;
+            double parsed = dialog->getDouble(unsupportedId, okValue);
+            if (okValue) {
+                unsupportedValue = parsed;
+            } else {
+                showDarkFramelessMessage(QStringLiteral("参数提示"),
+                                         QStringLiteral("「不支持/无效值」不是合法数字，已回退为默认值 -1.0。"));
+            }
+
+            // 4.4 执行 filter
             auto filter = iGame::CellMeshMetricsFilter::New();
             filter->setMetric(metric);
+            filter->setUnsupportedValue(unsupportedValue);
             filter->SetInput(obj);
             if (!filter->Execute()) {
                 showDarkFramelessMessage(
                         QStringLiteral("计算失败"),
-                        QStringLiteral("单元质量评估执行失败，请检查是否为合法体单元（四面体/六面体）。"));
+                        QStringLiteral("单元质量评估执行失败，请检查输入是否为可识别的体网格。"));
                 dialog->close();
                 return;
             }
 
-            // 3.4 属性已挂载到原模型上，刷新模型树即可
-            modelTreeWidget->updateAllAttriubute(obj);
+            // 4.5 输出独立结果节点（不修改原模型）
+            auto qualityObj = filter->GetOutput();
+            if (qualityObj == nullptr) {
+                showDarkFramelessMessage(QStringLiteral("计算失败"), QStringLiteral("未产生有效的输出结果。"));
+                dialog->close();
+                return;
+            }
+            qualityObj->SetName(obj->GetName() + "_CellQuality");
+            modelTreeWidget->addDataObjectToModelTree(qualityObj, Algorithm);
+            rendererWidget->update();
+
+            // 4.6 汇总报告：支持数量 / 跳过数量 / 使用的指标与不支持值
+            const int supported = filter->GetSupportedCount();
+            const int unsupported = filter->GetUnsupportedCount();
+            const int skipped = filter->GetSkippedBlockCount();
+            QString report = QStringLiteral("单元质量评估完成。\n\n"
+                                            "• 评估指标：%1\n"
+                                            "• 成功计算单元：%2 个\n"
+                                            "• 跳过不适用单元：%3 个（已标记为 %4）\n"
+                                            "• 无法处理的网格块：%5 个\n"
+                                            "• 结果已生成为独立节点：%6")
+                                     .arg(metricNames[selectedIndex])
+                                     .arg(supported)
+                                     .arg(unsupported)
+                                     .arg(unsupportedValue)
+                                     .arg(skipped)
+                                     .arg(QString::fromStdString(qualityObj->GetName()));
+            if (supported == 0 && unsupported > 0) {
+                report += QStringLiteral("\n\n提示：当前指标对模型中的所有单元均不适用，请更换评估指标或模型（四面体/六面体）。");
+            }
+            showDarkFramelessMessage(QStringLiteral("评估完成"), report, true);
         });
     });
 

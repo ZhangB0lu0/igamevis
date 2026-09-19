@@ -60,11 +60,7 @@ public:
 
     bool Execute() override;
 
-protected:
-    VolumeMeshMetricsFilter();
-    ~VolumeMeshMetricsFilter();
-    VolumeMetric m_Metric = VolumeMetric::TET_EDGE_RATIO; //质量指标类型
-
+    
     //四面体
     double ComputeMetric(igIndex vNum, igIndex* vhs);
     static std::vector<double> GetMinAndMaxLenOfCell(const std::vector<iGame::Point>& points);
@@ -89,6 +85,7 @@ protected:
     static double GetHighOfVertex(iGame::Point v0, iGame::Point v1, iGame::Point v2, iGame::Point v3);
     static double GetVolAspectRatioOfCell(const std::vector<iGame::Point>& points);
     static double GetEquiangleSkewnessOfCell(const std::vector<iGame::Point>& points);
+    static double GetMinDihedralAngleOfTet(const std::vector<iGame::Point>& points);
 
     // 六面体
     static double ComputeHexVolume(const std::vector<iGame::Point>& points);
@@ -107,9 +104,15 @@ protected:
     static double ComputeTetVolumeAlt(const std::vector<iGame::Point>& points);
     static double ComputeHexVolumeAlt(const std::vector<iGame::Point>& points);
 
+    static constexpr double PI = 3.14159265358979323846;
+
+protected:
+    VolumeMeshMetricsFilter();
+    ~VolumeMeshMetricsFilter();
+    VolumeMetric m_Metric = VolumeMetric::TET_EDGE_RATIO; //质量指标类型
+
     CellArray::Pointer m_Cells = nullptr;
     Points::Pointer m_Points = nullptr;
-    static constexpr double PI = 3.14159265358979323846;
 };
 
 IGAME_NAMESPACE_END

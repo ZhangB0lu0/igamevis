@@ -563,6 +563,26 @@ double VolumeMeshMetricsFilter::GetEquiangleSkewnessOfCell(const std::vector<Poi
     return maxEquiangleSkew = std::max(maxEquiangleSkew, maxSkew);
 }
 
+// 四面体最小二面角（度）—— 对齐 VTK MIN_ANGLE 的语义
+double VolumeMeshMetricsFilter::GetMinDihedralAngleOfTet(const std::vector<Point>& points) {
+    Vector3f ab = (points[1] - points[0]).normalized();
+    Vector3f ac = (points[2] - points[0]).normalized();
+    Vector3f ad = (points[3] - points[0]).normalized();
+    Vector3f bc = (points[2] - points[1]).normalized();
+    Vector3f bd = (points[3] - points[1]).normalized();
+    Vector3f cd = (points[3] - points[2]).normalized();
+
+    Vector3f abc = (bc.cross(ab)).normalized();
+    Vector3f abd = (ab.cross(ad)).normalized();
+    Vector3f acd = (cd.cross(ad)).normalized();
+    Vector3f bcd = (bc.cross(cd)).normalized();
+
+    double a[6] = {std::acos(-(abc * abd)), std::acos(-(abc * acd)), std::acos(-(abc * bcd)),
+                   std::acos(-(abd * acd)), std::acos(-(abd * bcd)), std::acos(-(acd * bcd))};
+    double mn = a[0];
+    for (double v: a) { mn = std::min(mn, v); }
+    return mn * 180.0 / PI;
+}
 
 //六面体
 

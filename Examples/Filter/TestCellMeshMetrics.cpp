@@ -1,21 +1,25 @@
 #include <Core/iGameScene.h>
 #include <MeshMetrics/iGameCellMeshMetricsFilter.h>
-#include <MeshMetrics/iGameVolumeMeshMetricsFilter.h>
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <filesystem>
 #include <iGameDrawObject.h>
 #include <iGameFileIO.h>
 #include <iGameInteractor.h>
 #include <iGameRenderWindow.h>
 #include <iGameUnstructuredMesh.h>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+using CellQualityMetric = iGame::CellMeshMetricsFilter::CellQualityMetric;
 
 // 智能模型路径查找（无论在根目录还是构建目录都能自动找到）
 std::string FindModelPath(const std::string& modelName) {
@@ -45,90 +49,98 @@ void PrintTreeStructure(iGame::DataObject::Pointer node, int depth = 0) {
     }
 }
 
-// 步骤 3：遍历输出树 —— 输出每个叶子及全局的指标范围，着色并配置色条
-void ProcessAndColorTree(iGame::DataObject::Pointer node, iGame::Scene::Pointer scene, double& globalMin,
-                         double& globalMax, bool& colorBarBound, int depth = 0) {
-    if (!node) return;
-    std::string indent(depth * 4, ' ');
+// ============================================================
+// 11 个统一指标 + ParaView 标准答案（由 vtkCellQuality 实测得到）
+// 标准答案来源：ParaView 6.1.1 / VTK，cell_metric_assembly_pv.vtm
+// ============================================================
+struct MetricCase {
+    const char* label;    // 中文名 (English)
+    const char* paraName; // ParaView 下拉框名称
+    CellQualityMetric metric;
+    const char* expectTet; // 期望值（四面体块）
+    const char* expectHex; // 期望值（六面体块）
+};
 
-    // 分支节点：向下递归
-    if (node->HasSubDataObject()) {
-        std::string name = node->GetName().empty() ? "(未命名)" : node->GetName();
-        std::cout << indent << "├── 装配组: [" << name << "] (" << node->GetNumberOfSubDataObjects() << " 个子块)\n";
-        for (auto it = node->SubDataObjectIteratorBegin(); it != node->SubDataObjectIteratorEnd(); ++it) {
-            ProcessAndColorTree(it->second, scene, globalMin, globalMax, colorBarBound, depth + 1);
-        }
-        return;
-    }
+const std::vector<MetricCase> kMetricCases = {
+        {"边长比 (Edge Ratio)", "Edge Ratio", CellQualityMetric::QUALITY_EDGE_RATIO, "1, 1.73205", "1, 1"},
+        {"单元体积 (Volume)", "Volume", CellQualityMetric::QUALITY_VOLUME, "0.117851, 0.117851", "1, 1"},
+        {"纵横比 (Aspect Ratio)", "Aspect Ratio", CellQualityMetric::QUALITY_ASPECT_RATIO, "1, 2.07313", "-1, -1"},
+        {"雅可比行列式 (Jacobian)", "Jacobian", CellQualityMetric::QUALITY_JACOBIAN, "0.707107, 0.707107", "1, 1"},
+        {"歪斜度 (Skew)", "Skew", CellQualityMetric::QUALITY_SKEW, "-1, -1", "0, 0"},
+        {"最小内角 (Minimum Angle)", "Minimum Angle", CellQualityMetric::QUALITY_MIN_ANGLE, "70.5288, 35.2644",
+         "-1, -1"},
+        {"锥度 (Taper)", "Taper", CellQualityMetric::QUALITY_TAPER, "-1, -1", "0, 0"},
+        {"伸展度 (Stretch)", "Stretch", CellQualityMetric::QUALITY_STRETCH, "-1, -1", "1, 1"},
+        {"对角线比值 (Diagonal)", "Diagonal", CellQualityMetric::QUALITY_DIAGONAL, "-1, -1", "1, 1"},
+        {"最大长宽比 (Max Edge Ratio)", "Maximum Edge Ratio", CellQualityMetric::QUALITY_MAX_EDGE_RATIO, "-1, -1",
+         "1, 1"},
+        {"塌陷率 (Collapse Ratio)", "Collapse Ratio", CellQualityMetric::QUALITY_COLLAPSE_RATIO, "0.816496, 0.288675",
+         "-1, -1"},
+};
 
-    // 叶子节点：查找 Metric 质量属性并统计范围
-    std::cout << indent << "└── 实体网格: [" << node->GetName() << "]\n";
-    auto attrSet = node->GetAttributeSet();
-    int qualityIndex = -1;
-    if (attrSet) {
-        for (int i = 0; i < (int)attrSet->GetNumberOfAttributes(); ++i) {
-            auto& attr = attrSet->GetAttribute(i);
-            if (!attr.isDeleted && attr.pointer && attr.pointer->GetName().find("Metric") != std::string::npos) {
-                qualityIndex = i;
+// 单个子块的评估结果
+struct BlockResult {
+    std::string name;
+    std::vector<double> values; // 原始值（含不支持值）
+    int validCount = 0;
+    int skippedCount = 0;
+};
+
+// 从输出树中收集各子块的 CellQuality 数组
+std::vector<BlockResult> CollectBlockResults(iGame::DataObject::Pointer root, double unsupportedValue) {
+    std::vector<BlockResult> results;
+    if (!root || !root->HasSubDataObject()) { return results; }
+
+    for (auto it = root->SubDataObjectIteratorBegin(); it != root->SubDataObjectIteratorEnd(); ++it) {
+        auto mesh = it->second;
+        BlockResult br;
+        br.name = mesh ? mesh->GetName() : "(null)";
+        auto attrSet = mesh ? mesh->GetAttributeSet() : nullptr;
+        if (attrSet) {
+            for (int i = 0; i < (int) attrSet->GetNumberOfAttributes(); ++i) {
+                auto& attr = attrSet->GetAttribute(i);
+                if (attr.isDeleted || !attr.pointer) { continue; }
+                if (attr.pointer->GetName() != "CellQuality") { continue; }
+                auto arr = attr.pointer;
+                for (IGsize c = 0; c < (IGsize) arr->GetNumberOfElements(); ++c) {
+                    double v = arr->GetValue(c);
+                    br.values.push_back(v);
+                    if (std::fabs(v - unsupportedValue) < 1e-9) {
+                        ++br.skippedCount;
+                    } else {
+                        ++br.validCount;
+                    }
+                }
                 break;
             }
         }
+        results.push_back(br);
     }
-    if (qualityIndex == -1) {
-        std::cout << indent << "    (未找到 Metric 质量属性，跳过)\n";
-        return;
+    return results;
+}
+
+// 与 ParaView 一致的 %.6g 风格格式化
+std::string FormatValues(const std::vector<double>& vals) {
+    if (vals.empty()) { return "(无数组)"; }
+    std::ostringstream oss;
+    oss << std::setprecision(6) << std::defaultfloat;
+    for (size_t i = 0; i < vals.size(); ++i) {
+        if (i) { oss << ", "; }
+        oss << vals[i];
     }
-
-    auto metricAttr = attrSet->GetAttribute(qualityIndex).pointer;
-    const int totalCells = (int)metricAttr->GetNumberOfElements();
-    double minVal = DBL_MAX, maxVal = -DBL_MAX, sum = 0.0;
-    for (int i = 0; i < totalCells; ++i) {
-        double val = metricAttr->GetValue(i);
-        sum += val;
-        minVal = std::min(minVal, val);
-        maxVal = std::max(maxVal, val);
-    }
-    const double avg = (totalCells > 0) ? (sum / totalCells) : 0.0;
-    globalMin = std::min(globalMin, minVal);
-    globalMax = std::max(globalMax, maxVal);
-
-    // ⭐ 步骤 3 核心：控制台输出评估指标范围
-    std::cout << indent << "    └─ 指标 [" << metricAttr->GetName() << "]: 单元总数 = " << totalCells
-              << " | 范围 = [" << minVal << ", " << maxVal << "] | 平均值 = " << avg << "\n";
-
-    // 3D 伪彩着色（表面 + 线框）
-    auto drawObj = iGame::DynamicCast<iGame::DrawObject>(node);
-    if (!drawObj) return;
-    drawObj->SetViewStyle(IG_SURFACE);
-    drawObj->AddViewStyle(IG_WIREFRAME);
-    drawObj->ConvertToDrawableData();
-    drawObj->ViewCloudPicture(scene.GetPointer(), qualityIndex);
-    scene->AddModel(node);
-
-    // 色条：绑定着色网格的 color mapper（须在 ViewCloudPicture 之后）
-    if (!colorBarBound) {
-        auto colorBar = scene->GetColorBar2DActor();
-        if (colorBar && drawObj->GetColorMapper()) {
-            colorBar->SetColorMapper(drawObj->GetColorMapper());
-            colorBar->SetTitle("TET_ASPECT_RATIO");
-            scene->SetColorBarVisible(true);
-            colorBarBound = true;
-            std::cout << indent << "    └─ 色条已绑定: TET_ASPECT_RATIO (蓝=范围最小, 白=中值, 红=范围最大)\n";
-        }
-    }
+    return oss.str();
 }
 
 int main() {
 #ifdef _WIN32
     SetConsoleOutputCP(65001); // Windows 控制台 UTF-8 支持
 #endif
-    std::cout << std::unitbuf; // 立即刷新输出，便于定位崩溃点
+    std::cout << std::unitbuf;
 
-    std::cout << "\n============================================================\n";
-    std::cout << "  【iGameVis】多块体网格 TET Aspect Ratio 质量评估测试\n";
-    std::cout << "============================================================\n";
+    std::cout << "\n==============================================================================\n";
+    std::cout << "  【iGameVis】Cell Quality 全量指标评估测试（对齐 ParaView vtkCellQuality）\n";
+    std::cout << "==============================================================================\n";
 
-    // 1. 创建场景
     auto scene = iGame::Scene::New();
 
     // ========== 步骤 1：读取 .vtm 多块模型 ==========
@@ -142,36 +154,96 @@ int main() {
     }
     std::cout << "  读取成功，多块树结构:\n";
     PrintTreeStructure(multiBlockObj);
-    std::cout << "  [步骤 1] 完成\n";
 
-    // ========== 步骤 2：应用四面体 Aspect Ratio 评估指标 ==========
-    std::cout << "\n[步骤 2] 应用四面体 Aspect Ratio (纵横比, 1=正四面体最优) 评估...\n";
-    auto filter = iGame::CellMeshMetricsFilter::New();
-    filter->setMetric(iGame::VolumeMeshMetricsFilter::TET_ASPECT_RATIO);
-    filter->SetInput(0, multiBlockObj);
-    if (!filter->Execute()) {
-        std::cerr << "  [错误] 质量评估算法执行失败！\n";
-        return -1;
-    }
-    auto outputObj = filter->GetOutput(0);
-    if (!outputObj) {
-        std::cerr << "  [错误] 输出数据为空！\n";
-        return -1;
-    }
-    std::cout << "  评估完成，属性已挂载到每个叶子网格 (Metric2)\n";
-    std::cout << "  [步骤 2] 完成\n";
+    // ========== 步骤 2：循环 11 个统一指标，与 ParaView 标准答案逐值对比 ==========
+    std::cout << "\n[步骤 2] 逐个指标评估并对比 ParaView 标准答案...\n";
+    const double kUnsupportedValue = -1.0;
+    int passCount = 0;
+    int failCount = 0;
 
-    // ========== 步骤 3：着色 + 色条 + 输出指标范围 ==========
-    std::cout << "\n[步骤 3] 伪彩着色、显示色条并输出指标范围...\n";
-    double globalMin = DBL_MAX, globalMax = -DBL_MAX;
-    bool colorBarBound = false;
-    ProcessAndColorTree(outputObj, scene, globalMin, globalMax, colorBarBound);
+    for (const auto& mc: kMetricCases) {
+        auto filter = iGame::CellMeshMetricsFilter::New();
+        filter->setMetric(mc.metric);
+        filter->setUnsupportedValue(kUnsupportedValue);
+        filter->SetInput(0, multiBlockObj);
+        if (!filter->Execute()) {
+            std::cout << "  [FAIL] " << mc.label << " —— 执行失败\n";
+            ++failCount;
+            continue;
+        }
+        auto outputObj = filter->GetOutput(0);
+        if (!outputObj) {
+            std::cout << "  [FAIL] " << mc.label << " —— 输出为空\n";
+            ++failCount;
+            continue;
+        }
+
+        auto blocks = CollectBlockResults(outputObj, kUnsupportedValue);
+        std::string actualTet = blocks.size() > 0 ? FormatValues(blocks[0].values) : "(缺块)";
+        std::string actualHex = blocks.size() > 1 ? FormatValues(blocks[1].values) : "(缺块)";
+        bool okTet = (actualTet == mc.expectTet);
+        bool okHex = (actualHex == mc.expectHex);
+        bool ok = okTet && okHex;
+        ok ? ++passCount : ++failCount;
+
+        std::cout << "\n  " << (ok ? "[PASS] " : "[FAIL] ") << mc.label
+                  << "   (ParaView: " << mc.paraName << ")\n";
+        std::cout << "     " << (blocks.size() > 0 ? blocks[0].name : "tet")
+                  << "  实际 = " << actualTet << "   期望 = " << mc.expectTet
+                  << (okTet ? "   OK" : "   <<< 不一致") << "\n";
+        std::cout << "     " << (blocks.size() > 1 ? blocks[1].name : "hex")
+                  << "  实际 = " << actualHex << "   期望 = " << mc.expectHex
+                  << (okHex ? "   OK" : "   <<< 不一致") << "\n";
+        std::cout << "     统计: 成功计算 = " << filter->GetSupportedCount()
+                  << " 个, 跳过不适用 = " << filter->GetUnsupportedCount() << " 个\n";
+    }
+
+    // ========== 步骤 3：汇总 ==========
+    std::cout << "\n[步骤 3] 对比汇总\n";
     std::cout << "  ------------------------------------------------\n";
-    std::cout << "  全局指标范围 (TET_ASPECT_RATIO): [" << globalMin << ", " << globalMax << "]\n";
-    std::cout << "  [步骤 3] 完成\n";
+    std::cout << "  与 ParaView 一致: " << passCount << " 个指标\n";
+    std::cout << "  不一致/失败    : " << failCount << " 个指标\n";
+    std::cout << "  ------------------------------------------------\n";
 
-    // 4. 启动 3D OpenGL 交互渲染窗口
-    std::cout << "\n正在拉起 3D 渲染窗口（左键旋转，滚轮缩放，底部色条显示指标映射范围）...\n";
+    // ========== 步骤 4：可视化演示（用 Aspect Ratio 的结果着色） ==========
+    std::cout << "\n[步骤 4] 用「纵横比 (Aspect Ratio)」结果做 3D 伪彩演示...\n";
+    auto demoFilter = iGame::CellMeshMetricsFilter::New();
+    demoFilter->setMetric(CellQualityMetric::QUALITY_ASPECT_RATIO);
+    demoFilter->setUnsupportedValue(kUnsupportedValue);
+    demoFilter->SetInput(0, multiBlockObj);
+    if (demoFilter->Execute()) {
+        auto demoOut = demoFilter->GetOutput(0);
+        if (demoOut && demoOut->HasSubDataObject()) {
+            for (auto it = demoOut->SubDataObjectIteratorBegin(); it != demoOut->SubDataObjectIteratorEnd(); ++it) {
+                auto drawObj = iGame::DynamicCast<iGame::DrawObject>(it->second);
+                if (!drawObj) { continue; }
+                auto attrSet = it->second->GetAttributeSet();
+                int qualityIndex = -1;
+                for (int i = 0; i < (int) attrSet->GetNumberOfAttributes(); ++i) {
+                    auto& attr = attrSet->GetAttribute(i);
+                    if (!attr.isDeleted && attr.pointer && attr.pointer->GetName() == "CellQuality") {
+                        qualityIndex = i;
+                        break;
+                    }
+                }
+                drawObj->SetViewStyle(IG_SURFACE);
+                drawObj->AddViewStyle(IG_WIREFRAME);
+                drawObj->ConvertToDrawableData();
+                if (qualityIndex >= 0) { drawObj->ViewCloudPicture(scene.GetPointer(), qualityIndex); }
+                scene->AddModel(it->second);
+
+                auto colorBar = scene->GetColorBar2DActor();
+                if (colorBar && drawObj->GetColorMapper()) {
+                    colorBar->SetColorMapper(drawObj->GetColorMapper());
+                    colorBar->SetTitle("CellQuality");
+                    scene->SetColorBarVisible(true);
+                }
+            }
+            std::cout << "  已着色，色条标题 = CellQuality\n";
+        }
+    }
+
+    std::cout << "\n正在拉起 3D 渲染窗口（左键旋转，滚轮缩放）...\n";
     auto window = iGame::RenderWindow::New();
     window->SetSize(1280, 720);
     window->SetScene(scene);
