@@ -1,3 +1,25 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Windows 平台前置处理：必须在【所有 iGameVis 头文件之前】完成。
+//
+// 原因：windows.h 会定义宏 `#define GetMessage GetMessageA`。
+//       若它先被某个 iGameVis 头文件间接引入，随后解析
+//       iGameMultiBlockGeometryFilter.h 时，类声明里的
+//       `GetMessage()` 就会被宏改写成 `GetMessageA()`，
+//       导致调用 `filter->GetMessage()` 报 C2039（不是成员）。
+//       因此这里先引入 windows.h 并立即 #undef，之后所有头文件都在
+//       无该宏的环境下解析；后续重复 include windows.h 也会被 include guard 挡住。
+// ─────────────────────────────────────────────────────────────────────────────
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#undef GetMessage
+#endif
+
 #include <Core/iGameScene.h>
 #include <ModelSurface/iGameMultiBlockGeometryFilter.h>
 #include <iGameDrawObject.h>
@@ -189,6 +211,9 @@ void TestInputValidation() {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    SetConsoleOutputCP(65001); // 控制台切 UTF-8，保证 Filter 返回的中文提示不乱码
+#endif
     std::cout << std::unitbuf; // 立即刷新输出，便于定位崩溃点
 
     bool selfCheckOnly = false;
