@@ -138,7 +138,9 @@ int main() {
     std::cout << std::unitbuf;
 
     std::cout << "\n==============================================================================\n";
-    std::cout << "  【iGameVis】Cell Quality 全量指标评估测试（对齐 ParaView vtkCellQuality）\n";
+    std::cout << "  【iGameVis】Cell Quality 单元质量评估 —— 与 ParaView 逐值对照测试\n";
+    std::cout << "  说明：iGameVis 与 ParaView 使用同一份几何，结果应逐单元完全一致；\n";
+    std::cout << "        该指标不适用的单元填入「不支持值」，不计入范围统计。\n";
     std::cout << "==============================================================================\n";
 
     auto scene = iGame::Scene::New();
@@ -146,7 +148,8 @@ int main() {
     // ========== 步骤 1：读取 .vtm 多块模型 ==========
     std::cout << "\n[步骤 1] 读取多块模型 (.vtm)...\n";
     const std::string vtmPath = FindModelPath("cell_metric_assembly.vtm");
-    std::cout << "  文件: " << vtmPath << "\n";
+    std::cout << "  iGameVis 侧模型: " << vtmPath << "\n";
+    std::cout << "  ParaView 侧模型: Examples/Models/cell_metric_assembly_pv.vtm\n";
     auto multiBlockObj = iGame::FileIO::ReadFile(vtmPath);
     if (!multiBlockObj) {
         std::cerr << "  [错误] 读取多块模型失败: " << vtmPath << "\n";
@@ -156,54 +159,85 @@ int main() {
     PrintTreeStructure(multiBlockObj);
 
     // ========== 步骤 2：循环 11 个统一指标，与 ParaView 标准答案逐值对比 ==========
-    std::cout << "\n[步骤 2] 逐个指标评估并对比 ParaView 标准答案...\n";
+    std::cout << "\n[步骤 2] 逐个指标评估，并与 ParaView 标准答案逐块、逐单元对照...\n";
     const double kUnsupportedValue = -1.0;
     int passCount = 0;
     int failCount = 0;
+    std::vector<std::string> recap; // 每个指标一行，供收尾汇总展示
 
+    // 定宽填充：便于录像时与 ParaView 的 SpreadSheet 逐行对照
+    auto pad = [](const std::string& s, size_t w) {
+        return s.size() >= w ? s : s + std::string(w - s.size(), ' ');
+    };
+    const std::string line(96, '-');
+
+    std::cout << "\n  ── ParaView 侧复现方法 ──────────────────────────────────────────────\n";
+    std::cout << "    1) File -> Open   Examples/Models/cell_metric_assembly_pv.vtm\n";
+    std::cout << "    2) Filters -> Alphabetical -> Cell Quality\n";
+    std::cout << "    3) Quality Measure 选择下表中对应的英文名，点击 Apply\n";
+    std::cout << "    4) 切到 SpreadSheet View，查看 \"CellQuality\" 列（每块 2 个单元）\n";
+    std::cout << "  ─────────────────────────────────────────────────────────────────────\n";
+
+    int metricIndex = 0;
     for (const auto& mc: kMetricCases) {
+        ++metricIndex;
+        const size_t total = kMetricCases.size();
+
+        std::cout << "\n" << line << "\n";
+        std::cout << " [ " << metricIndex << " / " << total << " ]  " << mc.label << "\n";
+        std::cout << "             ParaView Quality Measure = \"" << mc.paraName << "\"\n";
+        std::cout << line << "\n";
+
         auto filter = iGame::CellMeshMetricsFilter::New();
         filter->setMetric(mc.metric);
         filter->setUnsupportedValue(kUnsupportedValue);
         filter->SetInput(0, multiBlockObj);
         if (!filter->Execute()) {
-            std::cout << "  [FAIL] " << mc.label << " —— 执行失败\n";
+            std::cout << "   [FAIL] 执行失败\n";
             ++failCount;
+            recap.push_back("[FAIL] " + std::string(mc.label) + "  (执行失败)");
             continue;
         }
         auto outputObj = filter->GetOutput(0);
         if (!outputObj) {
-            std::cout << "  [FAIL] " << mc.label << " —— 输出为空\n";
+            std::cout << "   [FAIL] 输出为空\n";
             ++failCount;
+            recap.push_back("[FAIL] " + std::string(mc.label) + "  (输出为空)");
             continue;
         }
 
         auto blocks = CollectBlockResults(outputObj, kUnsupportedValue);
-        std::string actualTet = blocks.size() > 0 ? FormatValues(blocks[0].values) : "(缺块)";
-        std::string actualHex = blocks.size() > 1 ? FormatValues(blocks[1].values) : "(缺块)";
-        bool okTet = (actualTet == mc.expectTet);
-        bool okHex = (actualHex == mc.expectHex);
-        bool ok = okTet && okHex;
-        ok ? ++passCount : ++failCount;
 
-        std::cout << "\n  " << (ok ? "[PASS] " : "[FAIL] ") << mc.label
-                  << "   (ParaView: " << mc.paraName << ")\n";
-        std::cout << "     " << (blocks.size() > 0 ? blocks[0].name : "tet")
-                  << "  实际 = " << actualTet << "   期望 = " << mc.expectTet
-                  << (okTet ? "   OK" : "   <<< 不一致") << "\n";
-        std::cout << "     " << (blocks.size() > 1 ? blocks[1].name : "hex")
-                  << "  实际 = " << actualHex << "   期望 = " << mc.expectHex
-                  << (okHex ? "   OK" : "   <<< 不一致") << "\n";
-        std::cout << "     统计: 成功计算 = " << filter->GetSupportedCount()
-                  << " 个, 跳过不适用 = " << filter->GetUnsupportedCount() << " 个\n";
+        const char* expects[2] = {mc.expectTet, mc.expectHex};
+        bool metricOk = true;
+        for (int b = 0; b < 2; ++b) {
+            std::string bname = (b < (int) blocks.size()) ? blocks[b].name : std::string("(缺块)");
+            std::string actual = (b < (int) blocks.size()) ? FormatValues(blocks[b].values) : std::string("(缺块)");
+            bool ok = (actual == expects[b]);
+            if (!ok) { metricOk = false; }
+
+            std::cout << "   " << pad(bname, 20) << "iGameVis = " << pad(actual, 26)
+                      << "|  ParaView = " << pad(expects[b], 26)
+                      << (ok ? "[PASS]" : "[FAIL]  <<< 不一致") << "\n";
+        }
+        std::cout << "   " << pad("", 20) << "统计: 成功计算 = " << filter->GetSupportedCount()
+                  << " 个, 跳过不适用 = " << filter->GetUnsupportedCount()
+                  << " 个 (不支持值 = " << kUnsupportedValue << ")\n";
+
+        metricOk ? ++passCount : ++failCount;
+        recap.push_back(std::string(metricOk ? "[PASS] " : "[FAIL] ") + mc.label +
+                        "  (ParaView: " + mc.paraName + ")");
     }
 
     // ========== 步骤 3：汇总 ==========
-    std::cout << "\n[步骤 3] 对比汇总\n";
-    std::cout << "  ------------------------------------------------\n";
-    std::cout << "  与 ParaView 一致: " << passCount << " 个指标\n";
-    std::cout << "  不一致/失败    : " << failCount << " 个指标\n";
-    std::cout << "  ------------------------------------------------\n";
+    std::cout << "\n" << std::string(96, '=') << "\n";
+    std::cout << " 【汇总】iGameVis  CellQuality  vs  ParaView  Cell Quality\n";
+    std::cout << std::string(96, '=') << "\n";
+    for (const auto& r: recap) { std::cout << "   " << r << "\n"; }
+    std::cout << line << "\n";
+    std::cout << "   与 ParaView 一致 : " << passCount << " / " << kMetricCases.size() << " 个指标\n";
+    std::cout << "   不一致 / 失败    : " << failCount << " 个指标\n";
+    std::cout << std::string(96, '=') << "\n";
 
     // ========== 步骤 4：可视化演示（用 Aspect Ratio 的结果着色） ==========
     std::cout << "\n[步骤 4] 用「纵横比 (Aspect Ratio)」结果做 3D 伪彩演示...\n";
